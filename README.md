@@ -1,84 +1,82 @@
-# Let's Encrypt SSL Certificate for TP-Link Omada Software Controller on Windows 11
+# Install Let's Encrypt SSL Certificate on TP-Link Omada Controller (Windows 11)
 
-This guide explains how to obtain and renew a free SSL certificate from Let's Encrypt for **TP-Link Omada Software Controller** running on Windows 11.
+This guide shows how to install a free SSL certificate from Let's Encrypt on TP-Link Omada Software Controller running on Windows 11.
 
-The process uses:
+We will use:
 
-- **win-acme** to request and renew the SSL certificate.
-- **Let's Encrypt** as the certificate authority.
-- **XAMPP Apache** to handle HTTP-01 domain validation.
-- **OpenSSL** to check the certificate and prepare the PEM files.
-- **Omada Software Controller** to install the certificate.
+- **win-acme** – to get and renew the SSL certificate.
+- **Let's Encrypt** – to provide the free SSL certificate.
+- **XAMPP Apache** – to verify domain ownership.
+- **OpenSSL** – to check the certificate.
+- **Omada Controller** – to use the certificate.
 
-## 1. Environment
+## 1. What You Need
 
-This guide uses the following example environment:
+Before starting, prepare:
 
-| Component | Example |
+- Windows 11 computer.
+- TP-Link Omada Software Controller installed.
+- A domain name pointing to your public IP address.
+- XAMPP installed and Apache running.
+- Router access to configure port forwarding.
+
+Example setup:
+
+| Item | Example |
 |---|---|
-| Operating System | Windows 11 |
-| Omada Controller | Software Controller 6.x |
 | Domain | `omada.example.com` |
-| Omada HTTPS Management | TCP 8043 |
-| Omada HTTPS Portal | TCP 8843 |
-| HTTP Validation | TCP 80 |
-| Web Server | XAMPP Apache |
-| Certificate Authority | Let's Encrypt |
+| Omada HTTPS | `8043` |
+| Portal HTTPS | `8843` |
+| HTTP validation | `80` |
+| XAMPP web root | `C:\xampp\htdocs` |
 
-Replace the example domain and paths with your own environment.
+**Important:** Port 80 must be accessible from the internet for Let's Encrypt verification. You do not need to expose Omada port 8043 to the internet.
 
-## 2. Prepare the Domain and Network
+## 2. Configure Your Network
 
-Before requesting a certificate, make sure:
+Before requesting the certificate:
 
-1. Your domain points to your public IP address.
-2. TCP port **80** is forwarded from your router to the Windows machine running XAMPP.
-3. Windows Firewall allows inbound TCP port 80.
-4. XAMPP Apache is running and accessible through HTTP.
+1. Point your domain to your public IP address.
+2. Forward TCP port 80 on your router to your Windows computer.
+3. Allow TCP port 80 in Windows Firewall.
+4. Start Apache from XAMPP.
 
-Let's Encrypt uses HTTP-01 validation to verify domain ownership.
+Let's Encrypt will use port 80 to check whether you own the domain.
 
-**Important:** You only need port 80 for certificate validation. Do not expose Omada management port 8043 directly to the internet.
+## 3. Download and Install win-acme
 
-If you access Omada from inside your local network, you can configure local DNS on your router to point the domain to the Omada server's LAN IP address.
-
-## 3. Install win-acme
-
-Download win-acme from:
+Download win-acme:
 
 https://www.win-acme.com/
 
-1. Download the latest Windows x64 version.
+Steps:
+
+1. Download the Windows x64 version.
 2. Extract the ZIP file.
-3. Create a folder:
+3. Create this folder:
 
    ```text
    C:\tools\win-acme
    ```
 
-4. Extract the downloaded files into that folder.
+4. Copy the extracted files into that folder.
 5. Open PowerShell as Administrator.
-6. Navigate to the folder:
+6. Run:
 
    ```powershell
    cd C:\tools\win-acme
-   ```
-
-7. Run:
-
-   ```powershell
    .\wacs.exe
    ```
 
 The win-acme menu will appear.
 
-## 4. Request a Let's Encrypt Certificate
+## 4. Request a Certificate
 
-Follow the interactive menu in win-acme.
+Follow the win-acme menu.
 
-The menu wording may differ slightly between versions.
+The menu names may be slightly different depending on your win-acme version.
 
-1. Select the option to create a new certificate.
+1. Select **Create new certificate**.
 2. Choose the option to enter the domain manually.
 3. Enter your domain:
 
@@ -87,34 +85,33 @@ The menu wording may differ slightly between versions.
    ```
 
 4. Select HTTP-01 validation.
-5. Configure the validation to use the XAMPP Apache web root:
+5. Choose the option to use an existing website or web root.
+6. Enter the XAMPP web root:
 
    ```text
    C:\xampp\htdocs
    ```
 
-6. Choose the PEM files installation/store option.
-7. Set the output directory:
+7. When asked where to store the certificate, choose **PEM files**.
+8. Set the output folder:
 
    ```text
    C:\certificates\omada
    ```
 
-8. Complete the remaining prompts.
+9. Complete the remaining steps.
 
-If validation succeeds, win-acme will request and store the certificate.
+If everything works, win-acme will request the certificate and save the PEM files.
 
-You should see output indicating that the certificate was successfully created and the PEM files were exported.
+## 5. Check the Certificate Files
 
-## 5. Check the Generated Files
-
-Open:
+Open this folder:
 
 ```text
 C:\certificates\omada
 ```
 
-The generated files should look similar to:
+You should find files similar to:
 
 ```text
 omada.example.com-chain-only.pem
@@ -123,25 +120,22 @@ omada.example.com-crt.pem
 omada.example.com-key.pem
 ```
 
-The important files are:
+The files we need are:
 
-| File | Description |
+| File | Purpose |
 |---|---|
 | `-crt.pem` | Domain certificate |
 | `-key.pem` | Private key |
-| `-chain.pem` | Certificate and certificate chain |
-| `-chain-only.pem` | Certificate chain without the domain certificate |
+| `-chain-only.pem` | Intermediate and root certificates |
+| `-chain.pem` | Domain certificate and certificate chain |
 
-Keep the private key secure. Never upload it to GitHub or share it publicly.
+Keep the private key safe. Never upload it to GitHub.
 
 ## 6. Prepare the Certificate for Omada
 
-For this setup, prepare two files:
+Omada needs the certificate chain and private key.
 
-- Full chain certificate
-- Private key
-
-Create a staging folder:
+First, create a staging folder:
 
 ```powershell
 $CertDir = "C:\certificates\omada"
@@ -150,7 +144,7 @@ $Stage = "$CertDir\staging"
 New-Item -ItemType Directory -Path $Stage -Force
 ```
 
-Set the source files:
+Set the file paths:
 
 ```powershell
 $CertFile = "$CertDir\omada.example.com-crt.pem"
@@ -158,7 +152,7 @@ $ChainFile = "$CertDir\omada.example.com-chain-only.pem"
 $KeyFile = "$CertDir\omada.example.com-key.pem"
 ```
 
-Extract the first certificate from the chain file. In this example, it is the intermediate certificate:
+Prepare the full chain:
 
 ```powershell
 $ChainContent = Get-Content $ChainFile -Raw
@@ -173,11 +167,7 @@ if ($CertBlocks.Count -lt 1) {
 }
 
 $Intermediate = $CertBlocks[0].Value
-```
 
-Combine the domain certificate and intermediate certificate:
-
-```powershell
 $FullChain = (Get-Content $CertFile -Raw).Trim() +
     "`r`n" +
     $Intermediate.Trim() +
@@ -188,137 +178,128 @@ $FullChain = (Get-Content $CertFile -Raw).Trim() +
     $FullChain,
     [System.Text.Encoding]::ASCII
 )
-```
 
-Copy the private key:
-
-```powershell
 Copy-Item $KeyFile "$Stage\omada.example.com-key.pem" -Force
 ```
 
-Your staging folder should now contain:
+The staging folder should contain:
 
 ```text
-staging\
+staging/
 ├── omada.example.com-fullchain.pem
 └── omada.example.com-key.pem
 ```
 
-The full chain should contain the domain certificate followed by its intermediate certificate. Do not include the root certificate.
+The full chain contains the domain certificate and its intermediate certificate. The root certificate is not included.
 
-**Note:** Certificate chain contents may change. Check the certificate blocks before preparing the full chain rather than assuming the intermediate certificate is always in the same position.
+**Note:** Check the certificate order before using this command. The intermediate certificate may not always be in the same position.
 
-## 7. Validate the Certificate
+## 7. Check the Certificate
 
-XAMPP includes OpenSSL. In this example, the executable is:
+XAMPP includes OpenSSL.
+
+Open PowerShell and run:
 
 ```powershell
 $OpenSSL = "C:\xampp\apache\bin\openssl.exe"
 ```
 
-Set the certificate paths:
+Check the certificate:
 
 ```powershell
-$FullChain = "C:\certificates\omada\staging\omada.example.com-fullchain.pem"
-$KeyFile = "C:\certificates\omada\staging\omada.example.com-key.pem"
+& $OpenSSL x509 `
+  -in "C:\certificates\omada\staging\omada.example.com-fullchain.pem" `
+  -noout -subject -issuer -dates
 ```
 
-Check the certificate details:
+Check the domain:
 
 ```powershell
-& $OpenSSL x509 -in $FullChain -noout -subject -issuer -dates
-```
-
-Check the domain name:
-
-```powershell
-& $OpenSSL x509 -in $FullChain -noout -checkhost omada.example.com
+& $OpenSSL x509 `
+  -in "C:\certificates\omada\staging\omada.example.com-fullchain.pem" `
+  -noout -checkhost omada.example.com
 ```
 
 Check the private key:
 
 ```powershell
-& $OpenSSL pkey -in $KeyFile -check -noout
+& $OpenSSL pkey `
+  -in "C:\certificates\omada\staging\omada.example.com-key.pem" `
+  -check -noout
 ```
 
-Continue only if the certificate and private key checks succeed.
+If the checks are successful, the files are ready to be imported into Omada.
 
 ## 8. Import the Certificate into Omada
 
-Open the Omada Software Controller administration interface.
+Open your Omada Controller.
 
-Navigate to the certificate or HTTPS configuration section. The exact menu location may vary depending on the controller version.
+Go to the certificate or HTTPS configuration page. The menu location may depend on your Omada version.
 
-Upload:
+Upload these two files:
 
 | Omada field | File |
 |---|---|
 | Certificate / Full Chain | `omada.example.com-fullchain.pem` |
 | Private Key | `omada.example.com-key.pem` |
 
-Save or apply the configuration.
+Save the configuration.
 
-Restart the controller service if required by your Omada version.
+Restart the Omada Controller service if required.
 
-Then access Omada using:
+Open your Omada Controller using:
 
 ```text
 https://omada.example.com:8043
 ```
 
-Check the browser certificate information to confirm that the new certificate is being served.
+Check the browser's certificate information to confirm that the new certificate is active.
 
-## 9. Configure Automatic Renewal
+## 9. Automatic Certificate Renewal
 
-win-acme creates a renewal configuration after successfully requesting the certificate.
+win-acme creates a renewal configuration after the first successful certificate request.
 
-It also supports automatic renewal through Windows Task Scheduler.
+It also creates a scheduled task in Windows Task Scheduler.
 
-Check the existing renewal configuration:
+To check your certificate renewal configuration, run:
 
 ```powershell
 cd C:\tools\win-acme
 .\wacs.exe --list
 ```
 
-To check renewal manually:
+To check for certificates that are due for renewal:
 
 ```powershell
 .\wacs.exe --renew
 ```
 
-The renewal command checks the configured certificates and renews certificates when they are due. It does not issue a new certificate every time it runs.
+You do not need to renew the certificate every day. win-acme checks the renewal configuration and renews certificates when they are due.
 
-### Windows Task Scheduler
-
-Open Task Scheduler and look for the task created by win-acme:
+Open **Windows Task Scheduler** and look for:
 
 ```text
 win-acme renew (acme-v02.api.letsencrypt.org)
 ```
 
-The task runs a command similar to:
+This task runs the renewal command automatically.
 
-```powershell
-C:\tools\win-acme\wacs.exe --renew --baseuri "https://acme-v02.api.letsencrypt.org/"
-```
+### Important: Renewal Is Not the Same as Omada Deployment
 
-You can review the task's trigger and execution settings in Task Scheduler.
+win-acme can renew and update the PEM files, but this does not automatically mean Omada is using the new certificate.
 
-**Important:** Automatic renewal updates the certificate files. It does not automatically guarantee that Omada is using the renewed certificate. The new PEM files must also be deployed to Omada.
+After renewal, you still need to:
 
-## 10. After Certificate Renewal
+1. Prepare the updated full chain and private key.
+2. Check the certificate.
+3. Import the new files into Omada.
+4. Verify that Omada is serving the new certificate.
 
-After win-acme renews the certificate:
+## 10. Verify the Certificate Used by Omada
 
-1. Check the new certificate files in the output directory.
-2. Prepare the updated full chain and private key.
-3. Validate the certificate and key.
-4. Back up the currently deployed certificate if needed.
-5. Import the new files into Omada.
-6. Verify the certificate served by Omada.
+You can check the certificate served by Omada using OpenSSL.
 
-You can inspect the certificate currently served on port 8043 using OpenSSL:
+For the management interface:
 
 ```powershell
 $OpenSSL = "C:\xampp\apache\bin\openssl.exe"
@@ -329,7 +310,7 @@ $OpenSSL = "C:\xampp\apache\bin\openssl.exe"
     & $OpenSSL x509 -noout -subject -issuer -dates
 ```
 
-You can also check the portal HTTPS port 8843:
+For the portal interface:
 
 ```powershell
 "" | & $OpenSSL s_client `
@@ -338,29 +319,29 @@ You can also check the portal HTTPS port 8843:
     & $OpenSSL x509 -noout -subject -issuer -dates
 ```
 
-Check that the displayed certificate dates and issuer match the renewed certificate.
+Check the issuer and expiration date.
 
-## 11. Security Notes
+## 11. Final Notes
 
-- Never upload private key files (`*-key.pem`) to GitHub.
-- Do not expose Omada management ports directly to the public internet.
-- Keep a backup of the certificate and private key in a secure location.
-- Monitor the win-acme renewal task.
-- Remember that certificate renewal and Omada certificate deployment are separate steps.
-- Do not publish real domains, public IP addresses, private keys, or account credentials in your repository.
+- Let's Encrypt certificates are free.
+- win-acme handles certificate requests and renewal.
+- XAMPP Apache handles HTTP-01 validation in this setup.
+- OpenSSL helps check the certificate and private key.
+- Omada must be updated with the renewed certificate.
+- Never share your private key.
+- Do not upload real certificates or private keys to a public GitHub repository.
 
 ## Conclusion
 
-With win-acme and Let's Encrypt, you can obtain a free SSL certificate for TP-Link Omada Software Controller on Windows 11.
+You can use win-acme and Let's Encrypt to secure your TP-Link Omada Software Controller with a free SSL certificate.
 
-The process is straightforward:
+The process is simple:
 
-1. Prepare the domain and HTTP port 80.
+1. Prepare your domain and port 80.
 2. Install win-acme.
-3. Request a Let's Encrypt certificate.
-4. Export the PEM files.
-5. Prepare and validate the full chain and private key.
-6. Import the certificate into Omada.
-7. Configure automatic renewal and deploy renewed certificates when needed.
+3. Request the certificate.
+4. Prepare the PEM files.
+5. Import the certificate into Omada.
+6. Let win-acme check and renew the certificate when needed.
 
-This approach provides a practical way to manage SSL certificates for a self-hosted Omada Controller without purchasing a commercial certificate.
+This setup is useful for anyone running Omada Software Controller on Windows 11.
