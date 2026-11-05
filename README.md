@@ -1,14 +1,18 @@
-# Install Let's Encrypt SSL Certificate on TP-Link Omada Controller (Windows 11)
+# Install and Automate Let's Encrypt SSL Certificate Renewal on TP-Link Omada Controller (Windows 11)
 
-This guide shows how to install a free SSL certificate from Let's Encrypt on TP-Link Omada Software Controller running on Windows 11.
+This guide explains how to install a free SSL certificate from Let's Encrypt on TP-Link Omada Software Controller running on Windows 11, then configure an automated renewal workflow using win-acme, PowerShell, and Windows Task Scheduler.
 
-We will use:
+The workflow includes:
 
-- **win-acme** – to get and renew the SSL certificate.
-- **Let's Encrypt** – to provide the free SSL certificate.
-- **XAMPP Apache** – to verify domain ownership.
-- **OpenSSL** – to check the certificate.
-- **Omada Controller** – to use the certificate.
+- **win-acme** – to request and renew Let's Encrypt certificates.
+- **Let's Encrypt** – to issue free SSL certificates.
+- **XAMPP Apache** – to handle HTTP-01 domain validation.
+- **OpenSSL** – to validate certificates and private keys.
+- **PowerShell** – to automate backup, validation, and recovery.
+- **Windows Task Scheduler** – to run the renewal workflow automatically.
+- **Omada Controller** – to use the imported certificate.
+
+> **Important:** This implementation automates certificate renewal, PEM backup, and validation. Importing the renewed certificate into Omada is still a manual Web UI operation in this setup.
 
 ## 1. What You Need
 
@@ -19,18 +23,22 @@ Before starting, prepare:
 - A domain name pointing to your public IP address.
 - XAMPP installed and Apache running.
 - Router access to configure port forwarding.
+- OpenSSL available (XAMPP includes OpenSSL).
+- Administrator access to Windows.
 
 Example setup:
 
 | Item | Example |
 |---|---|
 | Domain | `omada.example.com` |
-| Omada HTTPS | `8043` |
-| Portal HTTPS | `8843` |
+| Omada HTTPS management | `8043` |
+| Omada HTTPS portal | `8843` |
 | HTTP validation | `80` |
 | XAMPP web root | `C:\xampp\htdocs` |
+| win-acme directory | `C:\tools\win-acme` |
+| Certificate directory | `C:\certificates\omada` |
 
-**Important:** Port 80 must be accessible from the internet for Let's Encrypt verification. You do not need to expose Omada port 8043 to the internet.
+**Important:** Port 80 must be accessible from the internet for Let's Encrypt HTTP-01 verification. You do not need to expose Omada management port 8043 to the internet.
 
 ## 2. Configure Your Network
 
@@ -40,8 +48,11 @@ Before requesting the certificate:
 2. Forward TCP port 80 on your router to your Windows computer.
 3. Allow TCP port 80 in Windows Firewall.
 4. Start Apache from XAMPP.
+5. Verify that the domain can reach the XAMPP web server from outside your local network.
 
-Let's Encrypt will use port 80 to check whether you own the domain.
+Let's Encrypt will use port 80 to verify domain ownership through the HTTP-01 challenge.
+
+If you use local DNS or NAT loopback, make sure that the domain also resolves correctly from your local network.
 
 ## 3. Download and Install win-acme
 
@@ -70,13 +81,15 @@ Steps:
 
 The win-acme menu will appear.
 
-## 4. Request a Certificate
+This implementation uses win-acme 2.2.9.1701 and the Let's Encrypt production ACME endpoint.
+
+## 4. Request a Let's Encrypt Certificate
 
 Follow the win-acme menu.
 
-The menu names may be slightly different depending on your win-acme version.
+The menu names may vary slightly depending on the version.
 
-1. Select **Create new certificate**.
+1. Select the option to create a new certificate.
 2. Choose the option to enter the domain manually.
 3. Enter your domain:
 
@@ -101,11 +114,13 @@ The menu names may be slightly different depending on your win-acme version.
 
 9. Complete the remaining steps.
 
-If everything works, win-acme will request the certificate and save the PEM files.
+After successful issuance, win-acme exports the certificate and private key as PEM files.
 
-## 5. Check the Certificate Files
+The renewal configuration is also saved by win-acme.
 
-Open this folder:
+## 5. Understand the PEM Certificate Files
+
+Open:
 
 ```text
 C:\certificates\omada
@@ -120,103 +135,44 @@ omada.example.com-crt.pem
 omada.example.com-key.pem
 ```
 
-The files we need are:
+The files have different purposes:
 
 | File | Purpose |
 |---|---|
-| `-crt.pem` | Domain certificate |
+| `-crt.pem` | Domain/leaf certificate |
 | `-key.pem` | Private key |
-| `-chain-only.pem` | Intermediate and root certificates |
-| `-chain.pem` | Domain certificate and certificate chain |
+| `-chain-only.pem` | Certificate chain without the leaf certificate |
+| `-chain.pem` | Domain certificate together with the certificate chain |
 
-Keep the private key safe. Never upload it to GitHub.
+In our tested setup, `-crt.pem` contains one certificate block, while `-chain.pem` contains the leaf certificate and additional chain certificates.
 
-## 6. Prepare the Certificate for Omada
+The exact chain contents can change when Let's Encrypt changes its certificate chain.
 
-Omada needs the certificate chain and private key.
+**Security note:** Never upload the private key to GitHub or share it publicly.
 
-First, create a staging folder:
+## 6. Prepare and Validate the Certificate
 
-```powershell
-$CertDir = "C:\certificates\omada"
-$Stage = "$CertDir\staging"
+Before importing the certificate into Omada, validate the exported PEM files.
 
-New-Item -ItemType Directory -Path $Stage -Force
-```
-
-Set the file paths:
-
-```powershell
-$CertFile = "$CertDir\omada.example.com-crt.pem"
-$ChainFile = "$CertDir\omada.example.com-chain-only.pem"
-$KeyFile = "$CertDir\omada.example.com-key.pem"
-```
-
-Prepare the full chain:
-
-```powershell
-$ChainContent = Get-Content $ChainFile -Raw
-
-$CertBlocks = [regex]::Matches(
-    $ChainContent,
-    '(?s)-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----'
-)
-
-if ($CertBlocks.Count -lt 1) {
-    throw "Intermediate certificate not found."
-}
-
-$Intermediate = $CertBlocks[0].Value
-
-$FullChain = (Get-Content $CertFile -Raw).Trim() +
-    "`r`n" +
-    $Intermediate.Trim() +
-    "`r`n"
-
-[System.IO.File]::WriteAllText(
-    "$Stage\omada.example.com-fullchain.pem",
-    $FullChain,
-    [System.Text.Encoding]::ASCII
-)
-
-Copy-Item $KeyFile "$Stage\omada.example.com-key.pem" -Force
-```
-
-The staging folder should contain:
-
-```text
-staging/
-├── omada.example.com-fullchain.pem
-└── omada.example.com-key.pem
-```
-
-The full chain contains the domain certificate and its intermediate certificate. The root certificate is not included.
-
-**Note:** Check the certificate order before using this command. The intermediate certificate may not always be in the same position.
-
-## 7. Check the Certificate
-
-XAMPP includes OpenSSL.
-
-Open PowerShell and run:
+XAMPP includes OpenSSL at:
 
 ```powershell
 $OpenSSL = "C:\xampp\apache\bin\openssl.exe"
 ```
 
-Check the certificate:
+Check the domain certificate:
 
 ```powershell
 & $OpenSSL x509 `
-  -in "C:\certificates\omada\staging\omada.example.com-fullchain.pem" `
+  -in "C:\certificates\omada\omada.example.com-crt.pem" `
   -noout -subject -issuer -dates
 ```
 
-Check the domain:
+Check the hostname:
 
 ```powershell
 & $OpenSSL x509 `
-  -in "C:\certificates\omada\staging\omada.example.com-fullchain.pem" `
+  -in "C:\certificates\omada\omada.example.com-crt.pem" `
   -noout -checkhost omada.example.com
 ```
 
@@ -224,80 +180,304 @@ Check the private key:
 
 ```powershell
 & $OpenSSL pkey `
-  -in "C:\certificates\omada\staging\omada.example.com-key.pem" `
+  -in "C:\certificates\omada\omada.example.com-key.pem" `
   -check -noout
 ```
 
-If the checks are successful, the files are ready to be imported into Omada.
+The certificate and private key must match. The automated validation script described later also checks this relationship.
 
-## 8. Import the Certificate into Omada
+For the Omada import, use the PEM certificate/chain and private key in the format accepted by your Omada Controller version. Do not assume that every PEM file has the same contents or is interchangeable.
 
-Open your Omada Controller.
+## 7. Import the Certificate into Omada
 
-Go to the certificate or HTTPS configuration page. The menu location may depend on your Omada version.
+Open Omada Software Controller.
 
-Upload these two files:
+Navigate to the certificate or HTTPS configuration page. The exact menu location depends on the Omada Controller version.
 
-| Omada field | File |
-|---|---|
-| Certificate / Full Chain | `omada.example.com-fullchain.pem` |
-| Private Key | `omada.example.com-key.pem` |
+Import the certificate using the Web UI.
 
-Save the configuration.
+For the tested workflow, the certificate was initially imported through Omada's Web UI using PEM files.
 
-Restart the Omada Controller service if required.
+After saving the configuration, restart the Omada Controller service if required by the application.
 
-Open your Omada Controller using:
+Access the management interface:
 
 ```text
 https://omada.example.com:8043
 ```
 
-Check the browser's certificate information to confirm that the new certificate is active.
+Check the browser's certificate information to confirm that the certificate is trusted and matches your domain.
 
-## 9. Automatic Certificate Renewal
+You can also check the certificate served by Omada using OpenSSL, as described in Section 12.
 
-win-acme creates a renewal configuration after the first successful certificate request.
+## 8. Create the Automated Backup and Validation Scripts
 
-It also creates a scheduled task in Windows Task Scheduler.
+To make renewal safer, we use two PowerShell scripts.
 
-To check your certificate renewal configuration, run:
+The scripts are stored in:
 
-```powershell
-cd C:\tools\win-acme
-.\wacs.exe --list
+```text
+C:\certificates\omada\scripts
 ```
 
-To check for certificates that are due for renewal:
+The directory structure is:
 
-```powershell
-.\wacs.exe --renew
+```text
+C:\certificates\omada
+│
+├── omada.example.com-chain-only.pem
+├── omada.example.com-chain.pem
+├── omada.example.com-crt.pem
+├── omada.example.com-key.pem
+│
+├── backup
+│   └── _pre-renewal
+│
+├── logs
+│
+└── scripts
+    ├── run-renewal.ps1
+    └── deploy-omada-cert.ps1
 ```
 
-You do not need to renew the certificate every day. win-acme checks the renewal configuration and renews certificates when they are due.
+### 8.1 run-renewal.ps1
 
-Open **Windows Task Scheduler** and look for:
+This is the main renewal runner.
+
+Its responsibilities are:
+
+1. Check that win-acme and the current PEM files exist.
+2. Create a pre-renewal backup directory.
+3. Copy the current PEM files into the backup directory.
+4. Write backup information to a log.
+5. Run win-acme renewal:
+
+   ```powershell
+   wacs.exe --renew --baseuri "https://acme-v02.api.letsencrypt.org/"
+   ```
+
+6. Capture the win-acme exit code.
+7. Log the result and return an appropriate exit status.
+
+The backup directory is:
+
+```text
+C:\certificates\omada\backup\_pre-renewal
+```
+
+The runner does not use `--force`. It allows win-acme to determine whether a certificate is due for renewal.
+
+**Why back up before renewal?**
+
+If a renewal produces invalid or unexpected PEM files, the previous certificate files are available for recovery.
+
+The `_pre-renewal` folder is a working snapshot. It is overwritten on the next run, so it should not be treated as a permanent historical archive.
+
+### 8.2 deploy-omada-cert.ps1
+
+Despite its filename, this script does not directly replace Omada's active certificate or modify its internal keystore.
+
+It is configured as win-acme's external installation script and performs post-export checks.
+
+Its responsibilities include:
+
+1. Validate the newly exported PEM files.
+2. Check certificate details and validity.
+3. Verify the hostname.
+4. Verify that the certificate and private key match.
+5. Check the certificate chain format.
+6. Restore the previous PEM set from `_pre-renewal` if validation fails.
+7. Archive the before-and-after PEM sets when validation succeeds.
+8. Write the result to the deployment log.
+
+Logs are stored in:
+
+```text
+C:\certificates\omada\logs
+```
+
+This approach separates certificate renewal from certificate activation in Omada.
+
+**Important:** The script validates and manages PEM files. It does not automatically import the new certificate into Omada.
+
+## 9. Configure win-acme to Run the Validation Script
+
+win-acme supports installation plugins that can execute an external script after a certificate is stored.
+
+To configure it:
+
+1. Open PowerShell as Administrator.
+2. Run:
+
+   ```powershell
+   cd C:\tools\win-acme
+   .\wacs.exe
+   ```
+
+3. Open the renewal management menu.
+4. Select the existing renewal configuration.
+5. Choose **Edit renewal**.
+6. Navigate to the **Installation** step.
+7. Select the option to run an external script or program.
+8. Enter:
+
+   ```text
+   C:\certificates\omada\scripts\deploy-omada-cert.ps1
+   ```
+
+9. Leave the script parameters blank if the script does not require them.
+10. Save the renewal configuration.
+
+win-acme will execute this script after exporting renewed certificate files.
+
+The installation plugin is part of the renewal configuration. You do not need to create a separate certificate request just to configure this step.
+
+## 10. Configure Windows Task Scheduler
+
+win-acme creates a scheduled task for automatic renewal.
+
+The original task is:
 
 ```text
 win-acme renew (acme-v02.api.letsencrypt.org)
 ```
 
-This task runs the renewal command automatically.
+In this implementation, the task action is changed to execute our PowerShell runner instead of calling win-acme directly.
 
-### Important: Renewal Is Not the Same as Omada Deployment
+The runner creates the pre-renewal backup before calling win-acme.
 
-win-acme can renew and update the PEM files, but this does not automatically mean Omada is using the new certificate.
+### 10.1 Update the Scheduled Task Action
 
-After renewal, you still need to:
+Open PowerShell as Administrator and run:
 
-1. Prepare the updated full chain and private key.
-2. Check the certificate.
-3. Import the new files into Omada.
-4. Verify that Omada is serving the new certificate.
+```powershell
+$TaskName = "win-acme renew (acme-v02.api.letsencrypt.org)"
 
-## 10. Verify the Certificate Used by Omada
+$Action = New-ScheduledTaskAction `
+    -Execute "powershell.exe" `
+    -Argument '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "C:\certificates\omada\scripts\run-renewal.ps1"' `
+    -WorkingDirectory "C:\tools\win-acme"
 
-You can check the certificate served by Omada using OpenSSL.
+Set-ScheduledTask -TaskName $TaskName -Action $Action
+```
+
+The task should retain its existing schedule and security settings.
+
+In our tested configuration:
+
+| Setting | Value |
+|---|---|
+| Run as | `SYSTEM` |
+| Logon type | ServiceAccount |
+| Run level | Highest |
+| Execution | PowerShell |
+| Script | `run-renewal.ps1` |
+| Working directory | `C:\tools\win-acme` |
+
+The task runs daily, with a randomized delay.
+
+### 10.2 Verify the Scheduled Task
+
+Run:
+
+```powershell
+$TaskName = "win-acme renew (acme-v02.api.letsencrypt.org)"
+
+Get-ScheduledTask -TaskName $TaskName |
+    Select-Object TaskName, State
+
+Get-ScheduledTaskInfo -TaskName $TaskName |
+    Format-List LastRunTime, LastTaskResult, NextRunTime
+```
+
+Expected successful result:
+
+```text
+State          : Ready
+LastTaskResult : 0
+```
+
+`LastTaskResult = 0` indicates that the scheduled task completed successfully.
+
+If you see `267009` (`0x41301`), the task is still running. Wait and check again rather than treating it as an immediate failure.
+
+### 10.3 Check the Pre-renewal Backup
+
+Run:
+
+```powershell
+Get-ChildItem "C:\certificates\omada\backup\_pre-renewal" |
+    Select-Object Name, Length
+```
+
+The folder should contain the four PEM files and backup information:
+
+```text
+backup-info.txt
+omada.example.com-chain-only.pem
+omada.example.com-chain.pem
+omada.example.com-crt.pem
+omada.example.com-key.pem
+```
+
+This confirms that the runner created the pre-renewal snapshot.
+
+## 11. Understand the Automated Renewal Workflow
+
+The complete workflow is:
+
+```text
+Windows Task Scheduler
+          |
+          v
+    run-renewal.ps1
+          |
+          v
+  Backup current PEM files
+          |
+          v
+      wacs.exe --renew
+          |
+          v
+  Is renewal due?
+          |
+     +----+----+
+     |         |
+    No         Yes
+     |         |
+     v         v
+  Finish    Export new PEM
+               |
+               v
+    deploy-omada-cert.ps1
+               |
+               v
+      Validate certificate
+               |
+          +----+----+
+          |         |
+        Valid     Invalid
+          |         |
+          v         v
+      Archive     Restore
+      PEM files   previous PEM
+          |         |
+          v         v
+        Finish    Log failure
+```
+
+There are two important points:
+
+- If the certificate is not due for renewal, win-acme completes its check without forcing a new certificate.
+- If a new certificate is issued, win-acme exports the PEM files and invokes the configured installation script.
+
+The workflow keeps a pre-renewal snapshot and supports recovery of the previous PEM files if validation fails.
+
+## 12. Verify the Certificate Served by Omada
+
+Renewing the PEM files does not automatically mean that Omada is serving the new certificate.
+
+Use OpenSSL to inspect the active certificate.
 
 For the management interface:
 
@@ -319,29 +499,57 @@ For the portal interface:
     & $OpenSSL x509 -noout -subject -issuer -dates
 ```
 
-Check the issuer and expiration date.
+Compare the certificate issuer and expiration date with the files in:
 
-## 11. Final Notes
+```text
+C:\certificates\omada
+```
 
-- Let's Encrypt certificates are free.
-- win-acme handles certificate requests and renewal.
-- XAMPP Apache handles HTTP-01 validation in this setup.
-- OpenSSL helps check the certificate and private key.
-- Omada must be updated with the renewed certificate.
-- Never share your private key.
-- Do not upload real certificates or private keys to a public GitHub repository.
+If the active Omada certificate is older than the newly exported PEM certificate, import the updated certificate through the Omada Web UI.
+
+Do not assume that replacing PEM files in the win-acme output folder updates Omada's active certificate.
+
+## 13. Important Security Considerations
+
+- Do not expose Omada management port 8043 directly to the public internet unless you have a separate security requirement and appropriate controls.
+- Keep TCP port 80 available for HTTP-01 validation.
+- Protect the private key file.
+- Restrict access to the certificate directory and its backups.
+- Keep the scripts and logs away from public repositories.
+- Do not use `--force` for routine renewal testing.
+- Do not manually modify Omada's internal keystore unless you have a verified, supported procedure and a recovery plan.
+- Test certificate validation and backup recovery before relying on the automation in production.
+
+## 14. Current Implementation Status
+
+The workflow has been tested on Windows 11 with Omada Software Controller 6.3.0.111 and win-acme 2.2.9.1701.
+
+| Component | Status |
+|---|---|
+| Let's Encrypt certificate issuance | Tested |
+| HTTP-01 validation through XAMPP | Configured |
+| PEM file export | Tested |
+| Certificate and key validation | Tested |
+| Pre-renewal backup | Tested |
+| Post-export validation script | Configured and executed |
+| Rollback logic for invalid PEM files | Included in script |
+| Windows Task Scheduler integration | Tested |
+| Scheduled renewal runner | Tested successfully |
+| Automatic Omada Web UI import | Not implemented |
+| Active certificate verification | Available through OpenSSL |
+
+The scheduled task test completed with `LastTaskResult = 0`, and the pre-renewal backup contained all four PEM files.
 
 ## Conclusion
 
-You can use win-acme and Let's Encrypt to secure your TP-Link Omada Software Controller with a free SSL certificate.
+Let's Encrypt and win-acme provide a practical way to manage SSL certificates for TP-Link Omada Software Controller on Windows 11.
 
-The process is simple:
+The implementation can be divided into three stages:
 
-1. Prepare your domain and port 80.
-2. Install win-acme.
-3. Request the certificate.
-4. Prepare the PEM files.
-5. Import the certificate into Omada.
-6. Let win-acme check and renew the certificate when needed.
+1. **Certificate management:** win-acme requests, exports, and renews the Let's Encrypt certificate.
+2. **Automation and recovery:** PowerShell backs up the previous PEM files, validates new exports, and supports rollback.
+3. **Omada activation:** the updated certificate is imported through Omada Web UI and verified on ports 8043 and 8843.
 
-This setup is useful for anyone running Omada Software Controller on Windows 11.
+This approach provides automated renewal checks and certificate file management while keeping the final Omada certificate activation under controlled administration.
+
+The next improvement would be to investigate a supported and reliable way to automate Omada certificate import without directly modifying undocumented internal keystore files.
